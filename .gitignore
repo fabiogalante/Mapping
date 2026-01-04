@@ -1,0 +1,19 @@
+## Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+[Bb]in/
+[Oo]bj/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+
+## Rider
+.idea/
+
+## User-specific files
+*.rsuser
+*.userosscache
+*.sln.docstates
