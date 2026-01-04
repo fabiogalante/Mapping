@@ -18,8 +18,8 @@ Este projeto é baseado no artigo [**"Mapping Domain-Driven Design Concepts To T
 - [Arquitetura](#-arquitetura)
 - [Pré-requisitos](#-pré-requisitos)
 - [Instalação](#-instalação)
-    - [Setup Automático](#setup-automático)
-    - [Setup Manual](#setup-manual)
+  - [Setup Automático](#setup-automático)
+  - [Setup Manual](#setup-manual)
 - [Executando o Projeto](#-executando-o-projeto)
 - [Endpoints da API](#-endpoints-da-api)
 - [Exemplos de Uso](#-exemplos-de-uso)
@@ -139,9 +139,9 @@ Presentation
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) ou superior
 - IDE/Editor de código:
-    - [Visual Studio 2022+](https://visualstudio.microsoft.com/)
-    - [Visual Studio Code](https://code.visualstudio.com/)
-    - [JetBrains Rider](https://www.jetbrains.com/rider/)
+  - [Visual Studio 2022+](https://visualstudio.microsoft.com/)
+  - [Visual Studio Code](https://code.visualstudio.com/)
+  - [JetBrains Rider](https://www.jetbrains.com/rider/)
 - Terminal/PowerShell/Bash
 
 ---
@@ -358,4 +358,409 @@ curl -X POST https://localhost:7xxx/api/orders \
   -H "Content-Type: application/json" \
   -d '{
     "customerId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-    "items
+    "items": [
+      {
+        "productId": "3fa85f64-5717-4562-b3fc-2c963f66afa7",
+        "quantity": 2,
+        "unitPrice": 50.00,
+        "currency": "USD"
+      }
+    ]
+  }'
+```
+
+#### Buscar pedido
+```bash
+curl https://localhost:7xxx/api/orders/{orderId}
+```
+
+### Usando C# (HttpClient)
+
+```csharp
+using System.Net.Http.Json;
+
+var client = new HttpClient { BaseAddress = new Uri("https://localhost:7xxx") };
+
+// Criar pedido
+var request = new CreateOrderRequest(
+    CustomerId: Guid.NewGuid(),
+    Items: new List<OrderItemRequest>
+    {
+        new(Guid.NewGuid(), 2, 50.00m, "USD")
+    }
+);
+
+var response = await client.PostAsJsonAsync("/api/orders", request);
+var order = await response.Content.ReadFromJsonAsync<OrderResponse>();
+
+Console.WriteLine($"Order created: {order.OrderId}");
+```
+
+---
+
+## 📂 Estrutura do Projeto
+
+```
+OrderManagement.Api/
+│
+├── 📁 Domain/                          # Camada de Domínio (Pura)
+│   │
+│   ├── 📁 Aggregates/
+│   │   └── Order.cs                    # Aggregate Root
+│   │
+│   ├── 📁 Entities/
+│   │   └── OrderItem.cs                # Entity (parte do agregado)
+│   │
+│   ├── 📁 ValueObjects/
+│   │   ├── Money.cs                    # Value Object - Dinheiro
+│   │   ├── Address.cs                  # Value Object - Endereço
+│   │   ├── OrderId.cs                  # Strongly Typed ID
+│   │   ├── CustomerId.cs               # Strongly Typed ID
+│   │   └── ProductId.cs                # Strongly Typed ID
+│   │
+│   ├── 📁 Exceptions/
+│   │   └── DomainException.cs          # Exceções de domínio
+│   │
+│   └── 📁 Repositories/
+│       └── IOrderRepository.cs         # Interface do repositório
+│
+├── 📁 Infrastructure/                  # Camada de Infraestrutura
+│   │
+│   ├── 📁 Persistence/
+│   │   ├── AppDbContext.cs             # EF Core DbContext
+│   │   └── OrderConfiguration.cs       # Configuração EF Core
+│   │
+│   └── 📁 Repositories/
+│       └── OrderRepository.cs          # Implementação do repositório
+│
+├── Program.cs                          # Configuração da API + Endpoints
+├── OrderManagement.Api.csproj          # Arquivo do projeto
+└── README.md                           # Este arquivo
+```
+
+---
+
+## 🎓 Conceitos Técnicos
+
+### 1. **Aggregate Root (Order)**
+
+```csharp
+public sealed class Order
+{
+    private readonly List<OrderItem> _items = new();
+    
+    // Encapsulamento total
+    public IReadOnlyCollection<OrderItem> Items => _items.AsReadOnly();
+    
+    // Invariante: quantidade deve ser positiva
+    public void AddItem(ProductId productId, int quantity, Money unitPrice)
+    {
+        if (quantity <= 0)
+            throw new DomainException("Quantity must be positive.");
+            
+        _items.Add(new OrderItem(productId, quantity, unitPrice));
+        RecalculateTotal(); // Mantém consistência
+    }
+}
+```
+
+**Características:**
+- ✅ Sem setters públicos
+- ✅ Backing fields privados
+- ✅ Validações no método de negócio
+- ✅ Total calculado automaticamente
+
+### 2. **Value Objects**
+
+```csharp
+public sealed record Money(decimal Amount, string Currency)
+{
+    public static Money operator +(Money a, Money b)
+    {
+        if (a.Currency != b.Currency)
+            throw new DomainException("Currencies must match.");
+        
+        return new Money(a.Amount + b.Amount, a.Currency);
+    }
+}
+```
+
+**Características:**
+- ✅ Imutável (record)
+- ✅ Igualdade por valor
+- ✅ Sem identidade
+- ✅ Operadores personalizados
+
+### 3. **Strongly Typed IDs**
+
+```csharp
+public sealed record OrderId(Guid Value);
+public sealed record CustomerId(Guid Value);
+public sealed record ProductId(Guid Value);
+
+// Uso:
+var order = new Order(
+    new OrderId(Guid.NewGuid()),
+    new CustomerId(customerId)  // Type-safe!
+);
+```
+
+**Benefícios:**
+- ❌ Impossível passar ID errado
+- ✅ Compilador valida tipos
+- ✅ Código mais legível
+
+### 4. **EF Core Mapping (Sem poluir o domínio)**
+
+```csharp
+public sealed class OrderConfiguration : IEntityTypeConfiguration<Order>
+{
+    public void Configure(EntityTypeBuilder<Order> builder)
+    {
+        // Conversão de Strongly Typed ID
+        builder.Property(o => o.Id)
+            .HasConversion(
+                id => id.Value,
+                value => new OrderId(value));
+        
+        // Value Object como Owned Entity
+        builder.OwnsOne(o => o.TotalPrice, money =>
+        {
+            money.Property(m => m.Amount).HasColumnName("TotalAmount");
+            money.Property(m => m.Currency).HasColumnName("Currency");
+        });
+        
+        // Backing field para encapsulamento
+        builder.Navigation(o => o.Items)
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
+    }
+}
+```
+
+### 5. **Check Constraints (Invariantes no BD)**
+
+```csharp
+builder.ToTable("Orders", table =>
+{
+    table.HasCheckConstraint(
+        "CK_Orders_TotalAmount_Positive",
+        "[TotalAmount] >= 0");
+});
+```
+
+**Dupla proteção:**
+- ✅ Domínio valida na aplicação
+- ✅ Banco valida na persistência
+
+---
+
+## 🧪 Testes
+
+### Teste de Domínio (Sem banco de dados)
+
+```csharp
+[Fact]
+public void Order_Should_Calculate_Total_Correctly()
+{
+    // Arrange
+    var order = new Order(
+        new OrderId(Guid.NewGuid()),
+        new CustomerId(Guid.NewGuid())
+    );
+    
+    // Act
+    order.AddItem(
+        new ProductId(Guid.NewGuid()),
+        2,
+        new Money(50, "USD")
+    );
+    
+    order.AddItem(
+        new ProductId(Guid.NewGuid()),
+        1,
+        new Money(30, "USD")
+    );
+    
+    // Assert
+    Assert.Equal(130, order.TotalPrice.Amount);
+    Assert.Equal("USD", order.TotalPrice.Currency);
+}
+
+[Fact]
+public void Order_Should_Not_Accept_Negative_Quantity()
+{
+    // Arrange
+    var order = new Order(
+        new OrderId(Guid.NewGuid()),
+        new CustomerId(Guid.NewGuid())
+    );
+    
+    // Act & Assert
+    Assert.Throws<DomainException>(() =>
+        order.AddItem(
+            new ProductId(Guid.NewGuid()),
+            -1,  // Quantidade inválida
+            new Money(50, "USD")
+        )
+    );
+}
+
+[Fact]
+public void Money_Should_Not_Add_Different_Currencies()
+{
+    // Arrange
+    var usd = new Money(100, "USD");
+    var eur = new Money(100, "EUR");
+    
+    // Act & Assert
+    Assert.Throws<DomainException>(() => usd + eur);
+}
+```
+
+### Executar Testes
+
+```bash
+dotnet test
+```
+
+---
+
+## ✨ Boas Práticas Implementadas
+
+### ✅ Domain Layer (Domínio)
+- [x] Sem dependências externas (EF Core, ASP.NET, etc)
+- [x] Apenas C# puro
+- [x] Regras de negócio encapsuladas
+- [x] Invariantes sempre respeitadas
+- [x] Testável sem infraestrutura
+
+### ✅ Infrastructure Layer (Infraestrutura)
+- [x] EF Core isolado
+- [x] Configurações separadas (Fluent API)
+- [x] Repository Pattern
+- [x] Conversões de Value Objects
+- [x] Backing fields respeitados
+
+### ✅ API Layer (Apresentação)
+- [x] DTOs separados do domínio
+- [x] Minimal APIs (endpoints limpos)
+- [x] Validações de entrada
+- [x] Tratamento de exceções
+- [x] Swagger configurado
+
+### ✅ Separação de Responsabilidades
+```
+Domain      → O QUE o sistema faz (lógica de negócio)
+Application → COMO usar o domínio (casos de uso)
+Infrastructure → ONDE persistir (banco de dados)
+API         → COMO acessar (HTTP endpoints)
+```
+
+---
+
+## 🗺️ Roadmap
+
+### ✅ Fase 1 - Fundamentos (Completo)
+- [x] Aggregate Root
+- [x] Value Objects
+- [x] Strongly Typed IDs
+- [x] Repository Pattern
+- [x] EF Core In-Memory
+
+### 🚧 Fase 2 - Melhorias
+- [ ] Domain Events
+- [ ] CQRS (Command Query Responsibility Segregation)
+- [ ] Validation com FluentValidation
+- [ ] Logs estruturados
+- [ ] Health Checks
+
+### 📋 Fase 3 - Produção
+- [ ] Trocar para SQL Server
+- [ ] Migrations
+- [ ] Docker support
+- [ ] CI/CD pipelines
+- [ ] Monitoring e observability
+
+### 🎯 Fase 4 - Avançado
+- [ ] Event Sourcing
+- [ ] Outbox Pattern
+- [ ] Distributed Transactions
+- [ ] Rate Limiting
+- [ ] API Versioning
+
+---
+
+## 🤝 Contribuindo
+
+Contribuições são bem-vindas! Para contribuir:
+
+1. Fork o projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
+3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
+4. Push para a branch (`git push origin feature/AmazingFeature`)
+5. Abra um Pull Request
+
+### Diretrizes
+
+- Siga os princípios de DDD
+- Mantenha o domínio puro (sem dependências)
+- Adicione testes para novas funcionalidades
+- Documente mudanças significativas
+
+---
+
+## 📚 Referências
+
+### Artigos
+- [Mapping Domain-Driven Design Concepts To The Database With EF Core](https://medium.com/@mariammaurice/mapping-domain-driven-design-concepts-to-the-database-with-ef-core-c92b3cc3cc85) - Mori (2026)
+
+### Livros
+- **Domain-Driven Design** - Eric Evans
+- **Implementing Domain-Driven Design** - Vaughn Vernon
+- **Clean Architecture** - Robert C. Martin
+
+### Documentação
+- [Entity Framework Core](https://docs.microsoft.com/ef/core/)
+- [ASP.NET Core](https://docs.microsoft.com/aspnet/core/)
+- [Domain-Driven Design](https://martinfowler.com/bliki/DomainDrivenDesign.html)
+
+---
+
+## 📄 Licença
+
+Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+
+---
+
+## 👨‍💻 Autor
+
+**Projeto de Demonstração**  
+Baseado no artigo de Mori sobre DDD e EF Core
+
+---
+
+## 🙏 Agradecimentos
+
+- **Mori** - Pelo excelente artigo que inspirou este projeto
+- **Eric Evans** - Pelos conceitos fundamentais de DDD
+- **Microsoft** - Pelo Entity Framework Core
+
+---
+
+## 📞 Suporte
+
+Se você tiver dúvidas ou problemas:
+
+1. Verifique a [documentação](#-índice)
+2. Abra uma [issue](https://github.com/seu-repo/issues)
+3. Consulte as [referências](#-referências)
+
+---
+
+<div align="center">
+
+**⭐ Se este projeto foi útil, considere dar uma estrela!**
+
+Made with ❤️ following Domain-Driven Design principles
+
+</div>
